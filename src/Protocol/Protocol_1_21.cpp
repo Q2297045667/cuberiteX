@@ -895,7 +895,7 @@ bool cProtocol_1_21_2::HandlePacket(cByteBuffer & a_ByteBuffer, UInt32 a_PacketT
 				case 0x2F: /* select villager trade */ return false;
 				case 0x30: HandlePacketSetBeaconEffect(a_ByteBuffer); return true;
 				case 0x31: HandlePacketSlotSelect(a_ByteBuffer); return true;
-				case 0x32: /* update command block */ return false;
+				case 0x32: HandlePacketCommandBlockUpdate(a_ByteBuffer); return true;
 				case 0x33: /* update minecart command block */ return false;
 				case 0x34: HandlePacketCreativeInventoryAction(a_ByteBuffer); return true;
 				case 0x35: /* Update jigsaw block */ return false;
@@ -1527,7 +1527,121 @@ void cProtocol_1_21_2::HandlePacketBlockPlace(cByteBuffer & a_ByteBuffer)
 	HANDLE_READ(a_ByteBuffer, ReadBool, bool, IsAgainstWorldBorder);
 	HANDLE_READ(a_ByteBuffer, ReadVarInt, Int32, Sequence);
 	m_Client->HandleRightClick({BlockX, BlockY, BlockZ}, FaceIntToBlockFace(Face), {FloorC(CursorX * 16), FloorC(CursorY * 16), FloorC(CursorZ * 16)}, Hand == 0);
+	m_Client->GetPlayer()->GetWorld()->FlushPendingBlockChanges();
 	m_Client->SendAcknowledgeBlockChange(Sequence);
+}
+
+
+
+
+
+UInt32 cProtocol_1_21_2::GetBlockEntityID(const cBlockEntity & a_BlockEntity) const
+{
+	Byte Action;
+
+	auto type = a_BlockEntity.GetBlockType();
+	if (BlockTags::Banners(type))
+	{
+		Action = 20;
+	}
+	else if (BlockTags::Beds(type))
+	{
+		Action = 25;
+	}
+	else if (BlockTags::AllHangingSigns(type))
+	{
+		Action = 8;
+	}
+	else if (BlockTags::Signs(type))
+	{
+		Action = 7;
+	}
+	else if (BlockTags::FlowerPots(type) || (type == BlockType::NoteBlock))
+	{
+		return static_cast<UInt32>(-1);  // temp fix
+	}
+	else  // TODO: skulls
+	{
+		switch (a_BlockEntity.GetBlockType())
+		{
+			// case BlockType::Banner:                Action = 20; break;
+			case BlockType::Barrel:                Action = 27; break;
+			case BlockType::Beacon:                Action = 15; break;
+			// case BlockType::Bed:                   Action = 25; break;
+			case BlockType::Beehive:               Action = 34; break;  // not impl
+			case BlockType::Bell:                  Action = 31; break;  // not impl
+			case BlockType::BlastFurnace:          Action = 29; break;  // not impl
+			case BlockType::BrewingStand:          Action = 12; break;
+			case BlockType::SuspiciousGravel:
+			case BlockType::SuspiciousSand:        Action = 40; break;
+			case BlockType::CalibratedSculkSensor: Action = 36; break;  // not impl
+			case BlockType::Campfire:              Action = 33; break;  // not impl
+			case BlockType::Chest:                 Action = 1; break;
+			case BlockType::ChiseledBookshelf:     Action = 39; break;  // not impl
+			case BlockType::CommandBlock:          Action = 23; break;
+			case BlockType::Comparator:            Action = 19; break;
+			case BlockType::Conduit:               Action = 26; break;  // not impl
+			case BlockType::Crafter:               Action = 42; break;  // not impl
+			case BlockType::CreakingHeart:         Action = 10; break;  // not impl
+			case BlockType::DaylightDetector:      Action = 17; break;
+			case BlockType::DecoratedPot:          Action = 41; break;  // not impl
+			case BlockType::Dispenser:             Action = 5; break;
+			case BlockType::Dropper:               Action = 6; break;
+			case BlockType::EnchantingTable:       Action = 13; break;
+			case BlockType::EndGateway:            Action = 22; break;
+			case BlockType::EndPortal:             Action = 14; break;
+			case BlockType::EnderChest:            Action = 3; break;
+			case BlockType::Furnace:               Action = 0; break;
+			// case BlockType::HangingSign:           Action = 8; break;
+			case BlockType::Hopper:                Action = 18; break;
+			case BlockType::Jigsaw:                Action = 32; break;  // not impl
+			case BlockType::Jukebox:               Action = 4; break;
+			case BlockType::Lectern:               Action = 30; break;  // not impl
+			case BlockType::Spawner:               Action = 9; break;
+			case BlockType::Piston:                Action = 11; break;
+			case BlockType::SculkCatalyst:         Action = 37; break;  // not impl
+			case BlockType::SculkSensor:           Action = 35; break;  // not impl
+			case BlockType::SculkShrieker:         Action = 38; break;  // not impl
+			case BlockType::ShulkerBox:            Action = 24; break;  // not impl
+			// case BlockType::Sign:                  Action = 7; break;
+			case BlockType::PlayerWallHead:
+			case BlockType::PlayerHead:             Action = 16; break;
+			// case BlockType::Skull:                 Action = 16; break;
+			case BlockType::Smoker:                Action = 28; break;  // not impl
+			case BlockType::StructureBlock:        Action = 21; break;  // not impl
+			case BlockType::TrappedChest:          Action = 2; break;
+			case BlockType::TrialSpawner:          Action = 43; break;  // not impl
+			case BlockType::Vault:                 Action = 44; break;  // not impl
+
+			default: UNREACHABLE("Unknown block entity");  // Block entities change between versions
+		}
+	}
+	return Action;
+}
+
+
+
+
+
+void cProtocol_1_21_2::SendUpdateBlockEntity(cBlockEntity & a_BlockEntity)
+{
+	ASSERT(m_State == 3);  // In game mode?
+
+	UInt32 Type = GetBlockEntityID(a_BlockEntity);
+
+	if (Type == static_cast<UInt32>(-1))
+	{
+		return;
+	}
+
+	cPacketizer Pkt(*this, pktUpdateBlockEntity);
+	Pkt.WriteXZYPosition64(a_BlockEntity.GetPosX(), a_BlockEntity.GetPosY(), a_BlockEntity.GetPosZ());
+	Pkt.WriteVarInt32(Type);
+
+	cFastNBTWriter Writer(true);
+	WriteBlockEntity(Writer, a_BlockEntity);
+	Writer.Finish();
+	Pkt.WriteBuf(Writer.GetResult());
 }
 
 
@@ -1660,7 +1774,7 @@ bool cProtocol_1_21_4::HandlePacket(cByteBuffer & a_ByteBuffer, UInt32 a_PacketT
 				case 0x31: /* select villager trade */ return false;
 				case 0x32: HandlePacketSetBeaconEffect(a_ByteBuffer); return true;
 				case 0x33: HandlePacketSlotSelect(a_ByteBuffer); return true;
-				case 0x34: /* update command block */ return false;
+				case 0x34: HandlePacketCommandBlockUpdate(a_ByteBuffer); return true;
 				case 0x35: /* update minecart command block */ return false;
 				case 0x36: HandlePacketCreativeInventoryAction(a_ByteBuffer); return true;
 				case 0x37: /* Update jigsaw block */ return false;

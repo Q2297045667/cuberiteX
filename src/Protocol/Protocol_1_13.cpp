@@ -33,6 +33,8 @@ Implements the 1.13 protocol classes:
 #include "WorldStorage/NamespaceSerializer.h"
 
 #include "../Bindings/PluginManager.h"
+#include "BlockEntities/MobHeadEntity.h"
+#include "BlockEntities/MobSpawnerEntity.h"
 #include "Entities/FallingBlock.h"
 #include "Entities/Floater.h"
 
@@ -203,6 +205,23 @@ void cProtocol_1_13::SendCommandTree()
 		}
 	}
 #endif
+}
+
+
+
+
+
+void cProtocol_1_13::HandlePacketCommandBlockUpdate(cByteBuffer & a_ByteBuffer)
+{
+	Vector3i command_block_pos;
+	if (!a_ByteBuffer.ReadXZYPosition64(command_block_pos))
+	{
+		return;
+	}
+	HANDLE_READ(a_ByteBuffer, ReadVarUTF8String, AString,    Command);
+	HANDLE_READ(a_ByteBuffer, ReadVarInt32,      UInt32,    Type);
+	HANDLE_READ(a_ByteBuffer, ReadVarInt32,      UInt32,    Flags);
+	m_Client->HandleCommandBlockBlockChange(command_block_pos, Command, static_cast<CommandBlockType>(Type), Flags & 0x01, Flags & 0x02, Flags & 0x04);
 }
 
 
@@ -428,6 +447,94 @@ void cProtocol_1_13::SendUpdateBlockEntity(cBlockEntity & a_BlockEntity)
 	WriteBlockEntity(Writer, a_BlockEntity);
 	Writer.Finish();
 	Pkt.WriteBuf(Writer.GetResult());
+}
+
+
+
+
+
+void cProtocol_1_13::WriteBlockEntity(cFastNBTWriter & a_Writer, const cBlockEntity & a_BlockEntity) const
+{
+	switch (a_BlockEntity.GetBlockType())
+	{
+		case BlockType::PlayerHead:
+		case BlockType::PlayerWallHead:
+		case BlockType::CreeperHead:
+		case BlockType::CreeperWallHead:
+		case BlockType::DragonHead:
+		case BlockType::DragonWallHead:
+		case BlockType::SkeletonSkull:
+		case BlockType::SkeletonWallSkull:
+		case BlockType::WitherSkeletonSkull:
+		case BlockType::WitherSkeletonWallSkull:
+		case BlockType::ZombieHead:
+		case BlockType::ZombieWallHead:
+		{
+			auto & MobHeadEntity = dynamic_cast<const cMobHeadEntity &>(a_BlockEntity);
+
+			// The new Block Entity format for a Mob Head. See: https://minecraft.wiki/w/Head#Block_entity
+			a_Writer.BeginCompound("profile");
+				a_Writer.AddIntArray("id", reinterpret_cast<const Int32 *>(MobHeadEntity.GetOwnerUUID().ToRaw().data()), 4);
+				a_Writer.AddString("name", MobHeadEntity.GetOwnerName());
+				a_Writer.BeginList("properties", TAG_Compound);
+					a_Writer.BeginCompound("");
+						a_Writer.AddString("name", "textures");
+						if (!MobHeadEntity.GetOwnerTextureSignature().empty())
+						{
+							a_Writer.AddString("signature", MobHeadEntity.GetOwnerTextureSignature());
+						}
+						a_Writer.AddString("value", MobHeadEntity.GetOwnerTexture());
+					a_Writer.EndCompound();
+				a_Writer.EndList();
+			a_Writer.EndCompound();
+			break;
+		}
+		case BlockType::Spawner:
+		{
+			auto & MobSpawnerEntity = dynamic_cast<const cMobSpawnerEntity &>(a_BlockEntity);
+			a_Writer.AddInt("x", a_BlockEntity.GetPosX());
+			a_Writer.AddInt("y", a_BlockEntity.GetPosY());
+			a_Writer.AddInt("z", a_BlockEntity.GetPosZ());
+			a_Writer.BeginCompound("SpawnData");
+				a_Writer.BeginCompound("entity");
+					a_Writer.AddString("id", "minecraft:" + cMonster::MobTypeToVanillaNBT(MobSpawnerEntity.GetEntity()));
+				a_Writer.EndCompound();
+			a_Writer.EndCompound();
+			a_Writer.AddShort("Delay", MobSpawnerEntity.GetSpawnDelay());
+			break;
+		}
+		case BlockType::Jukebox:
+		case BlockType::Furnace:
+		case BlockType::EnderChest:
+		case BlockType::Dropper:
+		case BlockType::Dispenser:
+		case BlockType::EndPortal:
+
+		case BlockType::BlackBed:
+		case BlockType::WhiteBed:
+		case BlockType::LightGrayBed:
+		case BlockType::GrayBed:
+		case BlockType::BrownBed:
+		case BlockType::RedBed:
+		case BlockType::OrangeBed:
+		case BlockType::YellowBed:
+		case BlockType::LimeBed:
+		case BlockType::GreenBed:
+		case BlockType::CyanBed:
+		case BlockType::LightBlueBed:
+		case BlockType::BlueBed:
+		case BlockType::PurpleBed:
+		case BlockType::MagentaBed:
+		case BlockType::PinkBed:
+		{
+			break;
+		}
+		default: return Super::WriteBlockEntity(a_Writer, a_BlockEntity);
+	}
+
+	a_Writer.AddInt("x", a_BlockEntity.GetPosX());
+	a_Writer.AddInt("y", a_BlockEntity.GetPosY());
+	a_Writer.AddInt("z", a_BlockEntity.GetPosZ());
 }
 
 
@@ -844,6 +951,7 @@ bool cProtocol_1_13::HandlePacket(cByteBuffer & a_ByteBuffer, UInt32 a_PacketTyp
 		case 0x28: HandlePacketSpectate(a_ByteBuffer); return true;
 		case 0x29: HandlePacketBlockPlace(a_ByteBuffer); return true;
 		case 0x2a: HandlePacketUseItem(a_ByteBuffer); return true;
+		case 0x22: HandlePacketCommandBlockUpdate(a_ByteBuffer); return true;
 	}
 
 	return Super::HandlePacket(a_ByteBuffer, a_PacketType);

@@ -15,6 +15,8 @@
 #include "Palettes/Palette_1_20.h"
 #include "UI/HorseWindow.h"
 #include "../Entities/Entity.h"
+#include "AllTags/BlockTags.h"
+#include "BlockEntities/SignEntity.h"
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -273,7 +275,7 @@ void cProtocol_1_20::SendEditSign(Vector3i a_BlockPos)
 void cProtocol_1_20::HandlePacketUpdateSign(cByteBuffer & a_ByteBuffer)
 {
 	Vector3i Position;
-	if (!a_ByteBuffer.ReadXYZPosition64(Position))
+	if (!a_ByteBuffer.ReadXZYPosition64(Position))
 	{
 		return;
 	}
@@ -308,6 +310,43 @@ void cProtocol_1_20::SendRespawn(eDimension a_Dimension)
 	Pkt.WriteBEInt8(0x3);   // keep player attributes
 	Pkt.WriteBool(false);  // optional last death pos
 	Pkt.WriteVarInt32(0);
+}
+
+
+
+
+
+void cProtocol_1_20::WriteBlockEntity(cFastNBTWriter & a_Writer, const cBlockEntity & a_BlockEntity) const
+{
+	auto type = a_BlockEntity.GetBlockType();
+	if (BlockTags::Signs(type))
+	{
+		const auto & sign = dynamic_cast<const cSignEntity &>(a_BlockEntity);
+		a_Writer.BeginCompound("front_text");
+			a_Writer.AddString("color", "black");
+			a_Writer.AddByte("has_glowing_text", false);
+			a_Writer.BeginList("messages", eTagType::TAG_String);
+				a_Writer.AddString("", JsonUtils::SerializeSingleValueJsonObject("text", sign.GetLine(0)));
+				a_Writer.AddString("", JsonUtils::SerializeSingleValueJsonObject("text", sign.GetLine(1)));
+				a_Writer.AddString("", JsonUtils::SerializeSingleValueJsonObject("text", sign.GetLine(2)));
+				a_Writer.AddString("", JsonUtils::SerializeSingleValueJsonObject("text", sign.GetLine(3)));
+			a_Writer.EndList();
+		a_Writer.EndCompound();
+		a_Writer.AddByte("is_waxed", false);
+	}
+	else
+	{
+		return Super::WriteBlockEntity(a_Writer, a_BlockEntity);
+	}
+	/*
+	switch (type)
+	{
+		default: return Super::WriteBlockEntity(a_Writer, a_BlockEntity);
+	}
+	*/
+	a_Writer.AddInt("x", a_BlockEntity.GetPosX());
+	a_Writer.AddInt("y", a_BlockEntity.GetPosY());
+	a_Writer.AddInt("z", a_BlockEntity.GetPosZ());
 }
 
 
@@ -769,7 +808,7 @@ bool cProtocol_1_20_2::HandlePacket(cByteBuffer & a_ByteBuffer, UInt32 a_PacketT
 				case 0x29: /* select villager trade */ return false;
 				case 0x2A: HandlePacketSetBeaconEffect(a_ByteBuffer); return true;
 				case 0x2B: HandlePacketSlotSelect(a_ByteBuffer); return true;
-				case 0x2C: /* update command block */ return false;
+				case 0x2C: HandlePacketCommandBlockUpdate(a_ByteBuffer); return true;
 				case 0x2D: /* update minecart command block */ return false;
 				case 0x2E: HandlePacketCreativeInventoryAction(a_ByteBuffer); return true;
 				case 0x2F: /* Update jigsaw block */ return false;
@@ -1437,7 +1476,7 @@ bool cProtocol_1_20_3::HandlePacket(cByteBuffer & a_ByteBuffer, UInt32 a_PacketT
 		case 0x2A: /* select villager trade */ return false;
 		case 0x2B: HandlePacketSetBeaconEffect(a_ByteBuffer); return true;
 		case 0x2C: HandlePacketSlotSelect(a_ByteBuffer); return true;
-		case 0x2D: /* update command block */ return false;
+		case 0x2D: HandlePacketCommandBlockUpdate(a_ByteBuffer); return true;
 		case 0x2E: /* update minecart command block */ return false;
 		case 0x2F: HandlePacketCreativeInventoryAction(a_ByteBuffer); return true;
 		case 0x30: /* Update jigsaw block */ return false;
@@ -1745,140 +1784,10 @@ void cProtocol_1_20_3::WriteEntityMetadata(cPacketizer & a_Pkt, const cEntity & 
 			a_Pkt.WriteBEUInt8(Player.IsLeftHanded() ? 0 : 1);
 			break;
 		}
-		case cEntity::etPickup:
-		{
-			WriteEntityMetadata(a_Pkt, EntityMetadata::ItemItem, EntityMetadataType::Item);
-			WriteItem(a_Pkt, static_cast<const cPickup &>(a_Entity).GetItem());
-			break;
-		}
-		case cEntity::etMinecart:
-		{
-			WriteEntityMetadata(a_Pkt, EntityMetadata::MinecartShakingPower, EntityMetadataType::VarInt);
-
-			// The following expression makes Minecarts shake more with less health or higher damage taken
-			auto & Minecart = static_cast<const cMinecart &>(a_Entity);
-			auto maxHealth = a_Entity.GetMaxHealth();
-			auto curHealth = a_Entity.GetHealth();
-			a_Pkt.WriteVarInt32(static_cast<UInt32>((maxHealth - curHealth) * Minecart.LastDamage() * 4));
-
-			WriteEntityMetadata(a_Pkt, EntityMetadata::MinecartShakingDirection, EntityMetadataType::VarInt);
-			a_Pkt.WriteVarInt32(1);  // (doesn't seem to effect anything)
-
-			WriteEntityMetadata(a_Pkt, EntityMetadata::MinecartShakingMultiplier, EntityMetadataType::Float);
-			a_Pkt.WriteBEFloat(static_cast<float>(Minecart.LastDamage() + 10));  // or damage taken
-
-			if (Minecart.GetPayload() == cMinecart::mpNone)
-			{
-				auto & RideableMinecart = static_cast<const cRideableMinecart &>(Minecart);
-				const cItem & MinecartContent = RideableMinecart.GetContent();
-				if (!MinecartContent.IsEmpty())
-				{
-					WriteEntityMetadata(a_Pkt, EntityMetadata::MinecartBlockIDMeta, EntityMetadataType::VarInt);
-					a_Pkt.WriteVarInt32(GetProtocolItemType(MinecartContent.m_ItemType));  // todo use proper palette
-
-					WriteEntityMetadata(a_Pkt, EntityMetadata::MinecartBlockY, EntityMetadataType::VarInt);
-					a_Pkt.WriteVarInt32(static_cast<UInt32>(RideableMinecart.GetBlockHeight()));
-
-					WriteEntityMetadata(a_Pkt, EntityMetadata::MinecartShowBlock, EntityMetadataType::Boolean);
-					a_Pkt.WriteBool(true);
-				}
-			}
-			else if (Minecart.GetPayload() == cMinecart::mpFurnace)
-			{
-				WriteEntityMetadata(a_Pkt, EntityMetadata::MinecartFurnacePowered, EntityMetadataType::Boolean);
-				a_Pkt.WriteBool(static_cast<const cMinecartWithFurnace &>(Minecart).IsFueled());
-			}
-			break;
-		}  // case etMinecart
-
-		case cEntity::etProjectile:
-		{
-			auto & Projectile = static_cast<const cProjectileEntity &>(a_Entity);
-			switch (Projectile.GetProjectileKind())
-			{
-				case cProjectileEntity::pkArrow:
-				{
-					WriteEntityMetadata(a_Pkt, EntityMetadata::ArrowFlags, EntityMetadataType::Byte);
-					a_Pkt.WriteBEInt8(static_cast<const cArrowEntity &>(Projectile).IsCritical() ? 1 : 0);
-
-					// TODO: Piercing level
-					break;
-				}
-				case cProjectileEntity::pkFirework:
-				{
-					// TODO
-					break;
-				}
-				case cProjectileEntity::pkSplashPotion:
-				{
-					// TODO
-					break;
-				}
-				default:
-				{
-					break;
-				}
-			}
-			break;
-		}  // case etProjectile
-
-		case cEntity::etMonster:
-		{
-			WriteMobMetadata(a_Pkt, static_cast<const cMonster &>(a_Entity));
-			break;
-		}
-
-		case cEntity::etBoat:
-		{
-			auto & Boat = static_cast<const cBoat &>(a_Entity);
-
-			WriteEntityMetadata(a_Pkt, EntityMetadata::BoatLastHitTime, EntityMetadataType::VarInt);
-			a_Pkt.WriteVarInt32(static_cast<UInt32>(Boat.GetLastDamage()));
-
-			WriteEntityMetadata(a_Pkt, EntityMetadata::BoatForwardDirection, EntityMetadataType::VarInt);
-			a_Pkt.WriteVarInt32(static_cast<UInt32>(Boat.GetForwardDirection()));
-
-			WriteEntityMetadata(a_Pkt, EntityMetadata::BoatDamageTaken, EntityMetadataType::Float);
-			a_Pkt.WriteBEFloat(Boat.GetDamageTaken());
-
-			WriteEntityMetadata(a_Pkt, EntityMetadata::BoatType, EntityMetadataType::VarInt);
-			a_Pkt.WriteVarInt32(static_cast<UInt32>(Boat.GetMaterial()));
-
-			WriteEntityMetadata(a_Pkt, EntityMetadata::BoatRightPaddleTurning, EntityMetadataType::Boolean);
-			a_Pkt.WriteBool(Boat.IsRightPaddleUsed());
-
-			WriteEntityMetadata(a_Pkt, EntityMetadata::BoatLeftPaddleTurning, EntityMetadataType::Boolean);
-			a_Pkt.WriteBool(static_cast<bool>(Boat.IsLeftPaddleUsed()));
-
-			WriteEntityMetadata(a_Pkt, EntityMetadata::BoatSplashTimer, EntityMetadataType::VarInt);
-			a_Pkt.WriteVarInt32(0);
-
-			break;
-		}  // case etBoat
-
-		case cEntity::etItemFrame:
-		{
-			// TODO
-			break;
-		}  // case etItemFrame
-
-		case cEntity::etEnderCrystal:
-		{
-			const auto & EnderCrystal = static_cast<const cEnderCrystal &>(a_Entity);
-			if (EnderCrystal.DisplaysBeam())
-			{
-				WriteEntityMetadata(a_Pkt, EntityMetadata::EnderCrystalBeamTarget, EntityMetadataType::OptPosition);
-				a_Pkt.WriteBool(true);  // Dont do a second check if it should display the beam
-				a_Pkt.WriteXYZPosition64(EnderCrystal.GetBeamTarget());
-			}
-			WriteEntityMetadata(a_Pkt, EntityMetadata::EnderCrystalShowBottom, EntityMetadataType::Boolean);
-			a_Pkt.WriteBool(EnderCrystal.ShowsBottom());
-			break;
-		}  // case etEnderCrystal
 
 		default:
 		{
-			break;
+			Super::WriteEntityMetadata(a_Pkt, a_Entity);
 		}
 	}
 }
@@ -2086,7 +1995,7 @@ bool cProtocol_1_20_5::HandlePacket(cByteBuffer & a_ByteBuffer, UInt32 a_PacketT
 				case 0x2D: /* select villager trade */ return false;
 				case 0x2E: HandlePacketSetBeaconEffect(a_ByteBuffer); return true;
 				case 0x2F: HandlePacketSlotSelect(a_ByteBuffer); return true;
-				case 0x30: /* update command block */ return false;
+				case 0x30: HandlePacketCommandBlockUpdate(a_ByteBuffer); return true;
 				case 0x31: /* update minecart command block */ return false;
 				case 0x32: HandlePacketCreativeInventoryAction(a_ByteBuffer); return true;
 				case 0x33: /* Update jigsaw block */ return false;

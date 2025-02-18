@@ -54,6 +54,7 @@
 #include "../Protocol/Palettes/Upgrade.h"
 #include <Protocol/Palettes/BlockMap.h>
 
+#include "JsonUtils.h"
 
 
 /** Collects and stores the chunk data via the cChunkDataCallback interface */
@@ -197,12 +198,12 @@ public:
 			if (!mHasHadBlockEntity)
 			{
 				mWriter.EndList();
-				mWriter.BeginList("TileEntities", TAG_Compound);
+				mWriter.BeginList("block_entities", TAG_Compound);
 			}
 		}
 		else
 		{
-			mWriter.BeginList("TileEntities", TAG_Compound);
+			mWriter.BeginList("block_entities", TAG_Compound);
 		}
 		mIsTagOpen = true;
 
@@ -377,7 +378,7 @@ public:
 		}
 		if (!mHasHadBlockEntity)
 		{
-			mWriter.BeginList("TileEntities", TAG_Compound);
+			mWriter.BeginList("block_entities", TAG_Compound);
 			mWriter.EndList();
 		}
 	}
@@ -392,62 +393,16 @@ public:
 	void AddItem(const cItem & a_Item, int a_Slot, const AString & a_CompoundName = AString())
 	{
 		mWriter.BeginCompound(a_CompoundName);
-		mWriter.AddShort("id",         static_cast<Int16>(a_Item.m_ItemType));
-		mWriter.AddShort("Damage",     static_cast<Int16>((a_Item.m_ItemDamage)));
-		mWriter.AddByte ("Count",      static_cast<Byte>(a_Item.m_ItemCount));
+		mWriter.AddString("id",         NamespaceSerializer::From(a_Item.m_ItemType));
+		mWriter.AddInt ("Count",      a_Item.m_ItemCount);
 		if (a_Slot >= 0)
 		{
 			mWriter.AddByte ("Slot", static_cast<unsigned char>(a_Slot));
 		}
 
-		// Write the tag compound (for enchantment, firework, custom name and repair cost):
-		if (
-			(!a_Item.m_Enchantments.IsEmpty()) ||
-			((a_Item.m_ItemType == Item::FireworkRocket) || (a_Item.m_ItemType == Item::FireworkStar)) ||
-			(a_Item.m_RepairCost > 0) ||
-			(a_Item.m_CustomName != "") ||
-			(!a_Item.m_LoreTable.empty())
-		)
-		{
-			mWriter.BeginCompound("tag");
-				if (a_Item.m_RepairCost > 0)
-				{
-					mWriter.AddInt("RepairCost", a_Item.m_RepairCost);
-				}
-
-				if ((a_Item.m_CustomName != "") || (!a_Item.m_LoreTable.empty()))
-				{
-					mWriter.BeginCompound("display");
-					if (a_Item.m_CustomName != "")
-					{
-						mWriter.AddString("Name", a_Item.m_CustomName);
-					}
-					if (!a_Item.m_LoreTable.empty())
-					{
-						mWriter.BeginList("Lore", TAG_String);
-
-						for (const auto & Line : a_Item.m_LoreTable)
-						{
-							mWriter.AddString("", Line);
-						}
-
-						mWriter.EndList();
-					}
-					mWriter.EndCompound();
-				}
-
-				if ((a_Item.m_ItemType == Item::FireworkRocket) || (a_Item.m_ItemType == Item::FireworkStar))
-				{
-					cFireworkItem::WriteToNBTCompound(a_Item.m_FireworkItem, mWriter, a_Item.m_ItemType);
-				}
-
-				if (!a_Item.m_Enchantments.IsEmpty())
-				{
-					const char * TagName = (a_Item.m_ItemType == Item::Book) ? "StoredEnchantments" : "ench";
-					EnchantmentSerializer::WriteToNBTCompound(a_Item.m_Enchantments, mWriter, TagName, false);
-				}
-			mWriter.EndCompound();
-		}
+		mWriter.BeginCompound("components");
+		// TODO: item components
+		mWriter.EndCompound();
 
 		mWriter.EndCompound();
 	}
@@ -492,8 +447,7 @@ public:
 	void AddBannerEntity(cBannerEntity * a_Entity)
 	{
 		mWriter.BeginCompound("");
-			AddBasicTileEntity(a_Entity,"Banner");
-			mWriter.AddInt("Base", static_cast<int>(a_Entity->GetBaseColor()));
+			AddBasicTileEntity(a_Entity,"minecraft:banner");
 			if (!a_Entity->GetCustomName().empty())
 			{
 				mWriter.AddString("CustomName", a_Entity->GetCustomName());
@@ -508,10 +462,15 @@ public:
 	void AddBeaconEntity(cBeaconEntity * a_Entity)
 	{
 		mWriter.BeginCompound("");
-			AddBasicTileEntity(a_Entity, "Beacon");
-			mWriter.AddInt("Levels", a_Entity->GetBeaconLevel());
-			mWriter.AddInt("Primary", static_cast<int>(a_Entity->GetPrimaryEffect()));
-			mWriter.AddInt("Secondary", static_cast<int>(a_Entity->GetSecondaryEffect()));
+			AddBasicTileEntity(a_Entity, "minecraft:beacon");
+			if (a_Entity->GetPrimaryEffect() != cEntityEffect::effNoEffect)
+			{
+				mWriter.AddString("primary_effect", "minecraft:" + AString(NamespaceSerializer::From(a_Entity->GetPrimaryEffect())));
+			}
+			if (a_Entity->GetSecondaryEffect() != cEntityEffect::effNoEffect)
+			{
+				mWriter.AddString("secondary_effect", "minecraft:" + AString(NamespaceSerializer::From(a_Entity->GetSecondaryEffect())));
+			}
 			mWriter.BeginList("Items", TAG_Compound);
 				AddItemGrid(a_Entity->GetContents());
 			mWriter.EndList();
@@ -525,8 +484,7 @@ public:
 	void AddBedEntity(cBedEntity * a_Entity)
 	{
 		mWriter.BeginCompound("");
-		AddBasicTileEntity(a_Entity, "Bed");
-		mWriter.AddInt("color", a_Entity->GetColor());
+		AddBasicTileEntity(a_Entity, "minecraft:bed");
 		mWriter.EndCompound();
 	}
 
@@ -537,12 +495,12 @@ public:
 	void AddBrewingstandEntity(cBrewingstandEntity * a_Brewingstand)
 	{
 		mWriter.BeginCompound("");
-			AddBasicTileEntity(a_Brewingstand, "Brewingstand");
+			AddBasicTileEntity(a_Brewingstand, "minecraft:brewing_stand");
 			mWriter.BeginList("Items", TAG_Compound);
 				AddItemGrid(a_Brewingstand->GetContents());
 			mWriter.EndList();
 			mWriter.AddShort("BrewTime", a_Brewingstand->GetTimeBrewed());
-			mWriter.AddShort("Fuel", a_Brewingstand->GetRemainingFuel());
+			mWriter.AddByte("Fuel", static_cast<unsigned char>(a_Brewingstand->GetRemainingFuel()));
 		mWriter.EndCompound();
 	}
 
@@ -553,7 +511,7 @@ public:
 	void AddChestEntity(cChestEntity * a_Entity, BlockType a_ChestType)
 	{
 		mWriter.BeginCompound("");
-			AddBasicTileEntity(a_Entity, "Chest");
+			AddBasicTileEntity(a_Entity, "minecraft:chest");
 			mWriter.BeginList("Items", TAG_Compound);
 				AddItemGrid(a_Entity->GetContents());
 			mWriter.EndList();
@@ -567,7 +525,7 @@ public:
 	void AddDispenserEntity(cDispenserEntity * a_Entity)
 	{
 		mWriter.BeginCompound("");
-			AddBasicTileEntity(a_Entity, "Trap");
+			AddBasicTileEntity(a_Entity, "minecraft:dispenser");
 			mWriter.BeginList("Items", TAG_Compound);
 				AddItemGrid(a_Entity->GetContents());
 			mWriter.EndList();
@@ -581,7 +539,7 @@ public:
 	void AddDropperEntity(cDropperEntity * a_Entity)
 	{
 		mWriter.BeginCompound("");
-			AddBasicTileEntity(a_Entity, "Dropper");
+			AddBasicTileEntity(a_Entity, "minecraft:dropper");
 			mWriter.BeginList("Items", TAG_Compound);
 				AddItemGrid(a_Entity->GetContents());
 			mWriter.EndList();
@@ -595,7 +553,7 @@ public:
 	void AddEnchantingTableEntity(cEnchantingTableEntity * a_Entity)
 	{
 		mWriter.BeginCompound("");
-			AddBasicTileEntity(a_Entity, "EnchantingTable");
+			AddBasicTileEntity(a_Entity, "minecraft:enchanting_table");
 			if (!a_Entity->GetCustomName().empty())
 			{
 				mWriter.AddString("CustomName", a_Entity->GetCustomName());
@@ -609,7 +567,7 @@ public:
 	void AddEnderchestEntity(cEnderChestEntity * a_Entity)
 	{
 		mWriter.BeginCompound("");
-			AddBasicTileEntity(a_Entity, "EnderChest");
+			AddBasicTileEntity(a_Entity, "minecraft:ender_chest");
 		mWriter.EndCompound();
 	}
 
@@ -619,7 +577,7 @@ public:
 	void AddEndPortalEntity(cEndPortalEntity * a_Entity)
 	{
 		mWriter.BeginCompound("");
-			AddBasicTileEntity(a_Entity, "EndPortal");
+			AddBasicTileEntity(a_Entity, "minecraft:end_portal");
 		mWriter.EndCompound();
 	}
 
@@ -630,12 +588,12 @@ public:
 	void AddFurnaceEntity(cFurnaceEntity * a_Furnace)
 	{
 		mWriter.BeginCompound("");
-			AddBasicTileEntity(a_Furnace, "Furnace");
+			AddBasicTileEntity(a_Furnace, "minecraft:furnace");
 			mWriter.BeginList("Items", TAG_Compound);
 				AddItemGrid(a_Furnace->GetContents());
 			mWriter.EndList();
-			mWriter.AddShort("BurnTime", static_cast<Int16>(a_Furnace->GetFuelBurnTimeLeft()));
-			mWriter.AddShort("CookTime", static_cast<Int16>(a_Furnace->GetTimeCooked()));
+			mWriter.AddShort("lit_time_remaining", static_cast<Int16>(a_Furnace->GetFuelBurnTimeLeft()));
+			mWriter.AddShort("cooking_time_spent", static_cast<Int16>(a_Furnace->GetTimeCooked()));
 		mWriter.EndCompound();
 	}
 
@@ -646,7 +604,7 @@ public:
 	void AddHopperEntity(cHopperEntity * a_Entity)
 	{
 		mWriter.BeginCompound("");
-			AddBasicTileEntity(a_Entity, "Hopper");
+			AddBasicTileEntity(a_Entity, "minecraft:hopper");
 			mWriter.BeginList("Items", TAG_Compound);
 				AddItemGrid(a_Entity->GetContents());
 			mWriter.EndList();
@@ -660,8 +618,8 @@ public:
 	void AddJukeboxEntity(cJukeboxEntity * a_Jukebox)
 	{
 		mWriter.BeginCompound("");
-			AddBasicTileEntity(a_Jukebox, "RecordPlayer");
-			mWriter.AddInt("Record", PaletteUpgrade::ToItem(a_Jukebox->GetRecord()).first);
+			AddBasicTileEntity(a_Jukebox, "minecraft:jukebox");
+			AddItem(a_Jukebox->GetRecord(), -1);
 		mWriter.EndCompound();
 	}
 
@@ -672,7 +630,7 @@ public:
 	void AddMobSpawnerEntity(cMobSpawnerEntity * a_MobSpawner)
 	{
 		mWriter.BeginCompound("");
-			AddBasicTileEntity(a_MobSpawner, "MobSpawner");
+			AddBasicTileEntity(a_MobSpawner, "minecraft:mob_spawner");
 			mWriter.AddString("EntityId", NamespaceSerializer::From(a_MobSpawner->GetEntity()));
 			mWriter.AddShort("SpawnCount", a_MobSpawner->GetSpawnCount());
 			mWriter.AddShort("SpawnRange", a_MobSpawner->GetSpawnRange());
@@ -691,7 +649,7 @@ public:
 	void AddNoteEntity(cNoteEntity * a_Note)
 	{
 		mWriter.BeginCompound("");
-			AddBasicTileEntity(a_Note, "Music");
+			AddBasicTileEntity(a_Note, "minecraft:noteblock");
 			mWriter.AddByte("note", static_cast<Byte>(a_Note->GetNote()));
 		mWriter.EndCompound();
 	}
@@ -703,7 +661,7 @@ public:
 	void AddCommandBlockEntity(cCommandBlockEntity * a_CmdBlock)
 	{
 		mWriter.BeginCompound("");
-			AddBasicTileEntity(a_CmdBlock, "Control");
+			AddBasicTileEntity(a_CmdBlock, "minecraft:command_block");
 			mWriter.AddString("Command",      a_CmdBlock->GetCommand());
 			mWriter.AddInt   ("SuccessCount", a_CmdBlock->GetResult());
 			mWriter.AddString("LastOutput",   a_CmdBlock->GetLastOutput());
@@ -718,11 +676,18 @@ public:
 	void AddSignEntity(cSignEntity * a_Sign)
 	{
 		mWriter.BeginCompound("");
-			AddBasicTileEntity(a_Sign, "Sign");
-			mWriter.AddString("Text1",   a_Sign->GetLine(0));
-			mWriter.AddString("Text2",   a_Sign->GetLine(1));
-			mWriter.AddString("Text3",   a_Sign->GetLine(2));
-			mWriter.AddString("Text4",   a_Sign->GetLine(3));
+			AddBasicTileEntity(a_Sign, "minecraft:sign");
+			mWriter.BeginCompound("front_text");
+				mWriter.AddString("color", "black");
+				mWriter.AddByte("has_glowing_text", false);
+				mWriter.BeginList("messages", eTagType::TAG_String);
+					mWriter.AddString("", a_Sign->GetLine(0));
+					mWriter.AddString("", a_Sign->GetLine(1));
+					mWriter.AddString("", a_Sign->GetLine(2));
+					mWriter.AddString("", a_Sign->GetLine(3));
+				mWriter.EndList();
+			mWriter.EndCompound();
+			mWriter.AddByte("is_waxed", false);
 		mWriter.EndCompound();
 	}
 
@@ -732,27 +697,26 @@ public:
 
 	void AddMobHeadEntity(cMobHeadEntity * a_MobHead)
 	{
-		// TODO: update for new versions
-		/*
 		mWriter.BeginCompound("");
-			AddBasicTileEntity(a_MobHead, "Skull");
-			mWriter.AddByte  ("SkullType", a_MobHead->GetType() & 0xFF);
-			mWriter.AddByte  ("Rot",       a_MobHead->GetRotation() & 0xFF);
-
-			// The new Block Entity format for a Mob Head. See: https://minecraft.wiki/w/Head#Block_entity
-			mWriter.BeginCompound("Owner");
-				mWriter.AddString("Id", a_MobHead->GetOwnerUUID().ToShortString());
-				mWriter.AddString("Name", a_MobHead->GetOwnerName());
-				mWriter.BeginCompound("Properties");
-					mWriter.BeginList("textures", TAG_Compound);
-						mWriter.BeginCompound("");
-							mWriter.AddString("Signature", a_MobHead->GetOwnerTextureSignature());
-							mWriter.AddString("Value", a_MobHead->GetOwnerTexture());
-						mWriter.EndCompound();
-					mWriter.EndList();
-				mWriter.EndCompound();
+		AddBasicTileEntity(a_MobHead, "minecraft:skull");
+		if (a_MobHead->GetType() == Item::PlayerHead)
+		{
+			mWriter.BeginCompound("profile");
+				mWriter.AddIntArray("id", reinterpret_cast<const Int32 *>(a_MobHead->GetOwnerUUID().ToRaw().data()), 4);
+				mWriter.AddString("name", a_MobHead->GetOwnerName());
+				mWriter.BeginList("properties", TAG_Compound);
+					mWriter.BeginCompound("");
+						mWriter.AddString("name", "textures");
+						if (!a_MobHead->GetOwnerTextureSignature().empty())
+						{
+							mWriter.AddString("signature", a_MobHead->GetOwnerTextureSignature());
+						}
+						mWriter.AddString("value", a_MobHead->GetOwnerTexture());
+					mWriter.EndCompound();
+				mWriter.EndList();
 			mWriter.EndCompound();
-		mWriter.EndCompound(); */
+		}
+		mWriter.EndCompound();
 	}
 
 

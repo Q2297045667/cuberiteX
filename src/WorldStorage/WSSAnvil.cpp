@@ -600,7 +600,11 @@ bool cWSSAnvil::LoadChunkFromNBT(const cChunkCoords & a_Chunk, const cParsedNBT 
 			}
 		}  // for itr - LevelSections[]
 
-		memset(&Data.HeightMap, 0, 256);  // temp
+		// Load the Height maps, if it fails, recalculate it:
+		if (!LoadHeightMapFromNBT(Data.HeightMap, a_NBT, a_NBT.FindChildByName(Level, "Heightmaps")))
+		{
+			Data.UpdateHeightMap();
+		}
 		memset(&Data.BiomeMap, 0, 1024);  // temp
 
 		// Load the entities from NBT:
@@ -610,7 +614,7 @@ bool cWSSAnvil::LoadChunkFromNBT(const cChunkCoords & a_Chunk, const cParsedNBT 
 			entities = a_NBT.FindChildByName(Level, "entities");
 		}
 		LoadEntitiesFromNBT(Data.Entities, a_NBT, entities);
-		// TODO: block entites
+		LoadBlockEntitiesFromNBT(Data.BlockEntities, a_NBT, a_NBT.FindChildByName(Level, "block_entities"), Data.BlockData);
 	}
 
 	m_World->QueueSetChunkData(std::move(Data));
@@ -777,34 +781,20 @@ bool cWSSAnvil::LoadBiomeMapFromNBT(cChunkDef::BiomeMap & a_BiomeMap, const cPar
 
 bool cWSSAnvil::LoadHeightMapFromNBT(cChunkDef::HeightMap & a_HeightMap, const cParsedNBT & a_NBT, const int a_TagIdx)
 {
-	if (
-		(a_TagIdx < 0) ||
-		(a_NBT.GetType(a_TagIdx) != TAG_IntArray) ||
-		(a_NBT.GetDataLength(a_TagIdx) != (4 * std::size(a_HeightMap)))
-	)
+	if (a_TagIdx < 0)
 	{
 		return false;
 	}
-
-	const auto * const HeightData = a_NBT.GetData(a_TagIdx);
-	for (int RelZ = 0; RelZ < cChunkDef::Width; RelZ++)
+	/*
+	int WorldSurface = a_NBT.FindChildByName(a_TagIdx, "WORLD_SURFACE");
+	if ((WorldSurface > 0) && (a_NBT.GetType(WorldSurface) == eTagType::TAG_LongArray))
 	{
-		for (int RelX = 0; RelX < cChunkDef::Width; RelX++)
-		{
-			const int Index = 4 * (RelX + RelZ * cChunkDef::Width);
-			const int Height = NetworkBufToHost<Int32>(HeightData + Index);
-
-			if (Height > std::numeric_limits<HEIGHTTYPE>::max())
-			{
-				// Invalid data:
-				return false;
-			}
-
-			cChunkDef::SetHeight(a_HeightMap, RelX, RelZ, static_cast<HEIGHTTYPE>(Height));
-		}
+		// auto WorldSurfaceData = a_NBT.GetData(WorldSurface);
+		// TODO: implement height map loading
+		return false;
 	}
-
-	return true;
+	*/
+	return false;
 }
 
 
@@ -1063,80 +1053,13 @@ bool cWSSAnvil::LoadItemFromNBT(cItem & a_Item, const cParsedNBT & a_NBT, int a_
 		return true;
 	}
 
-	short ItemDamage = 0;
-	int Damage = a_NBT.FindChildByName(a_TagIdx, "Damage");
-	if ((Damage > 0) && (a_NBT.GetType(Damage) == TAG_Short))
-	{
-		ItemDamage = a_NBT.GetShort(Damage);
-	}
-
-	a_Item.m_ItemType = PaletteUpgrade::FromItem(ItemType, ItemDamage);
-	if (ItemCategory::IsTool(a_Item.m_ItemType))  // Can sustain damage
-	{
-		a_Item.m_ItemDamage = ItemDamage;
-	}
-
 	int Count = a_NBT.FindChildByName(a_TagIdx, "Count");
-	if ((Count > 0) && (a_NBT.GetType(Count) == TAG_Byte))
+	if ((Count > 0) && (a_NBT.GetType(Count) == TAG_Int))
 	{
-		a_Item.m_ItemCount = static_cast<char>(a_NBT.GetByte(Count));
+		a_Item.m_ItemCount = static_cast<char>(a_NBT.GetInt(Count));
 	}
 
-	// Find the "tag" tag, used for enchantments and other extra data
-	int TagTag = a_NBT.FindChildByName(a_TagIdx, "tag");
-	if (TagTag <= 0)
-	{
-		// No extra data
-		return true;
-	}
-
-	// Load repair cost:
-	int RepairCost = a_NBT.FindChildByName(TagTag, "RepairCost");
-	if ((RepairCost > 0) && (a_NBT.GetType(RepairCost) == TAG_Int))
-	{
-		a_Item.m_RepairCost = a_NBT.GetInt(RepairCost);
-	}
-
-	// Load display name:
-	int DisplayTag = a_NBT.FindChildByName(TagTag, "display");
-	if (DisplayTag > 0)
-	{
-		int DisplayName = a_NBT.FindChildByName(DisplayTag, "Name");
-		if ((DisplayName > 0) && (a_NBT.GetType(DisplayName) == TAG_String))
-		{
-			a_Item.m_CustomName = a_NBT.GetString(DisplayName);
-		}
-		int Lore = a_NBT.FindChildByName(DisplayTag, "Lore");
-		if ((Lore > 0) && (a_NBT.GetType(Lore) == TAG_String))
-		{
-			// Legacy string lore
-			a_Item.m_LoreTable = StringSplit(a_NBT.GetString(Lore), "`");
-		}
-		else if ((Lore > 0) && (a_NBT.GetType(Lore) == TAG_List))
-		{
-			// Lore table
-			a_Item.m_LoreTable.clear();
-			for (int loretag = a_NBT.GetFirstChild(Lore); loretag >= 0; loretag = a_NBT.GetNextSibling(loretag))  // Loop through array of strings
-			{
-				a_Item.m_LoreTable.push_back(a_NBT.GetString(loretag));
-			}
-		}
-	}
-
-	// Load enchantments:
-	const char * EnchName = (a_Item.m_ItemType == Item::EnchantedBook) ? "StoredEnchantments" : "ench";
-	int EnchTag = a_NBT.FindChildByName(TagTag, EnchName);
-	if (EnchTag > 0)
-	{
-		EnchantmentSerializer::ParseFromNBT(a_Item.m_Enchantments, a_NBT, EnchTag);
-	}
-
-	// Load firework data:
-	int FireworksTag = a_NBT.FindChildByName(TagTag, ((a_Item.m_ItemType == Item::FireworkStar) ? "Explosion" : "Fireworks"));
-	if (FireworksTag > 0)
-	{
-		cFireworkItem::ParseFromNBT(a_Item.m_FireworkItem, a_NBT, FireworksTag, a_Item.m_ItemType);
-	}
+	// TODO: item components
 
 	return true;
 }
@@ -1253,7 +1176,7 @@ bool cWSSAnvil::CheckBlockEntityType(const cParsedNBT & a_NBT, int a_TagIdx, con
 
 OwnedBlockEntity cWSSAnvil::LoadBannerFromNBT(const cParsedNBT & a_NBT, int a_TagIdx, BlockState a_Block, Vector3i a_Pos)
 {
-	static const AStringVector expectedTypes({"Banner", "minecraft:standingbanner","minecraft:wallbanner"});  // TODO(12xx12): update list
+	static const AStringVector expectedTypes({"Banner", "minecraft:standingbanner","minecraft:wallbanner","minecraft:banner"});
 	if (!CheckBlockEntityType(a_NBT, a_TagIdx, expectedTypes, a_Pos))
 	{
 		return nullptr;
@@ -1262,15 +1185,9 @@ OwnedBlockEntity cWSSAnvil::LoadBannerFromNBT(const cParsedNBT & a_NBT, int a_Ta
 	unsigned char Color = 15;
 	AString CustomName;
 
-	// Reads base color from NBT
-	int CurrentLine = a_NBT.FindChildByName(a_TagIdx, "Base");
-	if (CurrentLine >= 0)
-	{
-		Color = static_cast<unsigned char>(a_NBT.GetInt(CurrentLine));
-		return std::make_unique<cBannerEntity>(a_Block, a_Pos, m_World, Color);
-	}
+	// TODO: read banner patterns
 
-	CurrentLine = a_NBT.FindChildByName(a_TagIdx, "CustomName");
+	int CurrentLine = a_NBT.FindChildByName(a_TagIdx, "CustomName");
 	if ((CurrentLine >= 0) && (a_NBT.GetType(CurrentLine) == TAG_String))
 	{
 		CustomName = a_NBT.GetString(CurrentLine);
@@ -1296,22 +1213,16 @@ OwnedBlockEntity cWSSAnvil::LoadBeaconFromNBT(const cParsedNBT & a_NBT, int a_Ta
 
 	auto Beacon = std::make_unique<cBeaconEntity>(a_Block, a_Pos, m_World);
 
-	int CurrentLine = a_NBT.FindChildByName(a_TagIdx, "Levels");
+	int CurrentLine = a_NBT.FindChildByName(a_TagIdx, "primary_effect");
 	if (CurrentLine >= 0)
 	{
-		Beacon->SetBeaconLevel(static_cast<char>(a_NBT.GetInt(CurrentLine)));
+		Beacon->SetPrimaryEffect(NamespaceSerializer::ToEntityEffect(a_NBT.GetString(CurrentLine).substr(10, std::string::npos)));
 	}
 
-	CurrentLine = a_NBT.FindChildByName(a_TagIdx, "Primary");
+	CurrentLine = a_NBT.FindChildByName(a_TagIdx, "secondary_effect");
 	if (CurrentLine >= 0)
 	{
-		Beacon->SetPrimaryEffect(static_cast<cEntityEffect::eType>(a_NBT.GetInt(CurrentLine)));
-	}
-
-	CurrentLine = a_NBT.FindChildByName(a_TagIdx, "Secondary");
-	if (CurrentLine >= 0)
-	{
-		Beacon->SetSecondaryEffect(static_cast<cEntityEffect::eType>(a_NBT.GetInt(CurrentLine)));
+		Beacon->SetSecondaryEffect(NamespaceSerializer::ToEntityEffect(a_NBT.GetString(CurrentLine).substr(10, std::string::npos)));
 	}
 
 	// We are better than mojang, we load / save the beacon inventory!
@@ -1337,16 +1248,7 @@ OwnedBlockEntity cWSSAnvil::LoadBedFromNBT(const cParsedNBT & a_NBT, int a_TagId
 		return nullptr;
 	}
 
-	// Use color red as default
-	short Color = E_META_WOOL_RED;
-
-	int ColorIDx = a_NBT.FindChildByName(a_TagIdx, "color");
-	if (ColorIDx >= 0)
-	{
-		Color = static_cast<short>(a_NBT.GetInt(ColorIDx));
-	}
-
-	return std::make_unique<cBedEntity>(a_Block, a_Pos, m_World, Color);
+	return std::make_unique<cBedEntity>(a_Block, a_Pos, m_World);
 }
 
 
@@ -1374,7 +1276,7 @@ OwnedBlockEntity cWSSAnvil::LoadBrewingstandFromNBT(const cParsedNBT & a_NBT, in
 	int Fuel = a_NBT.FindChildByName(a_TagIdx, "Fuel");
 	if (Fuel >= 0)
 	{
-		Int16 tb = a_NBT.GetShort(Fuel);
+		Int16 tb = a_NBT.GetByte(Fuel);
 		Brewingstand->SetRemainingFuel(tb);
 	}
 
@@ -1654,7 +1556,7 @@ OwnedBlockEntity cWSSAnvil::LoadFurnaceFromNBT(const cParsedNBT & a_NBT, int a_T
 	}  // for itr - ItemDefs[]
 
 	// Load burn time:
-	int BurnTime = a_NBT.FindChildByName(a_TagIdx, "BurnTime");
+	int BurnTime = a_NBT.FindChildByName(a_TagIdx, "lit_time_remaining");
 	if (BurnTime >= 0)
 	{
 		Int16 bt = a_NBT.GetShort(BurnTime);
@@ -1663,7 +1565,7 @@ OwnedBlockEntity cWSSAnvil::LoadFurnaceFromNBT(const cParsedNBT & a_NBT, int a_T
 	}
 
 	// Load cook time:
-	int CookTime = a_NBT.FindChildByName(a_TagIdx, "CookTime");
+	int CookTime = a_NBT.FindChildByName(a_TagIdx, "cooking_time_spent");
 	if (CookTime >= 0)
 	{
 		Int16 ct = a_NBT.GetShort(CookTime);
@@ -1716,7 +1618,9 @@ OwnedBlockEntity cWSSAnvil::LoadJukeboxFromNBT(const cParsedNBT & a_NBT, int a_T
 	int Record = a_NBT.FindChildByName(a_TagIdx, "Record");
 	if (Record >= 0)
 	{
-		Jukebox->SetRecord(PaletteUpgrade::FromItem(a_NBT.GetShort(Record), 0));
+		cItem record_item;
+		LoadItemFromNBT(record_item, a_NBT, Record);
+		Jukebox->SetRecord(record_item.m_ItemType);
 	}
 	return Jukebox;
 }
@@ -1817,61 +1721,67 @@ OwnedBlockEntity cWSSAnvil::LoadMobHeadFromNBT(const cParsedNBT & a_NBT, int a_T
 	{
 		return nullptr;
 	}
-	// TODO: update for new versions
 	auto MobHead = std::make_unique<cMobHeadEntity>(a_Block, a_Pos, m_World);
-	int currentLine = a_NBT.FindChildByName(a_TagIdx, "SkullType");
-	if (currentLine >= 0)
-	{
-		// MobHead->SetType(static_cast<eMobHeadType>(a_NBT.GetByte(currentLine)));
-	}
 
-	currentLine = a_NBT.FindChildByName(a_TagIdx, "Rot");
-	if (currentLine >= 0)
-	{
-		MobHead->SetRotation(static_cast<eMobHeadRotation>(a_NBT.GetByte(currentLine)));
-	}
-
-	int ownerLine = a_NBT.FindChildByName(a_TagIdx, "Owner");
+	int ownerLine = a_NBT.FindChildByName(a_TagIdx, "profile");
 	if (ownerLine >= 0)
 	{
 		AString OwnerName, OwnerTexture, OwnerTextureSignature;
 		cUUID OwnerUUID;
-
-		currentLine = a_NBT.FindChildByName(ownerLine, "Id");
+		MobHead->SetType(Item::PlayerHead);
+		int currentLine = a_NBT.FindChildByName(ownerLine, "Id");
 		if (currentLine >= 0)
 		{
-			OwnerUUID.FromString(a_NBT.GetString(currentLine));
+			std::array<UInt32, 4> little_endian;
+			for (int i = 0; i < 4; ++i)
+			{
+				little_endian[static_cast<UInt32>(i)] = NetworkBufToHost<UInt32>(static_cast<UInt64>(i * 4) + a_NBT.GetData(currentLine));
+			}
+			OwnerUUID.FromRaw(reinterpret_cast<std::array<Byte, 16> &>(little_endian));
 		}
 
-		currentLine = a_NBT.FindChildByName(ownerLine, "Name");
+		currentLine = a_NBT.FindChildByName(ownerLine, "name");
 		if (currentLine >= 0)
 		{
 			OwnerName = a_NBT.GetString(currentLine);
 		}
 
-		int textureLine = a_NBT.GetFirstChild(  // The first texture of
-			a_NBT.FindChildByName(              // The texture list of
-				a_NBT.FindChildByName(          // The Properties compound of
-					ownerLine,                  // The Owner compound
-					"Properties"
-				),
-				"textures"
-			)
-		);
-		if (textureLine >= 0)
+		int props = a_NBT.FindChildByName(ownerLine, "properties");
+		if ((props < 0) || (a_NBT.GetChildrenType(props) != TAG_Compound))
 		{
-			currentLine = a_NBT.FindChildByName(textureLine, "Signature");
-			if (currentLine >= 0)
+			return MobHead;
+		}
+
+		for (int Child = a_NBT.GetFirstChild(props); Child >= 0; Child = a_NBT.GetNextSibling(Child))
+		{
+			int nametag = a_NBT.FindChildByName(Child, "name");
+			if ((nametag < 0) || (a_NBT.GetType(nametag) != TAG_String))
 			{
-				OwnerTextureSignature = a_NBT.GetString(currentLine);
+				return MobHead;
+			}
+			AString name = a_NBT.GetString(nametag);
+
+			int value_tag = a_NBT.FindChildByName(Child, "value");
+			if ((value_tag < 0) || (a_NBT.GetType(value_tag) != TAG_String))
+			{
+				return MobHead;
+			}
+			AString value = a_NBT.GetString(value_tag);
+
+			int sig_tag = a_NBT.FindChildByName(Child, "signature");
+			AString signature;
+			if ((sig_tag > 0) && (a_NBT.GetType(sig_tag) == TAG_String))
+			{
+				signature = a_NBT.GetString(sig_tag);
 			}
 
-			currentLine = a_NBT.FindChildByName(textureLine, "Value");
-			if (currentLine >= 0)
+			if (name == "textures")
 			{
-				OwnerTexture = a_NBT.GetString(currentLine);
+				OwnerTexture = value;
+				OwnerTextureSignature = signature;
 			}
 		}
+
 		MobHead->SetOwner(OwnerUUID, OwnerName, OwnerTexture, OwnerTextureSignature);
 	}
 
@@ -1915,30 +1825,26 @@ OwnedBlockEntity cWSSAnvil::LoadSignFromNBT(const cParsedNBT & a_NBT, int a_TagI
 
 	auto Sign = std::make_unique<cSignEntity>(a_Block, a_Pos, m_World);
 
-	int currentLine = a_NBT.FindChildByName(a_TagIdx, "Text1");
-	if (currentLine >= 0)
+	int front = a_NBT.FindChildByName(a_TagIdx, "front_text");
+	if (front >= 0)
 	{
-		Sign->SetLine(0, DecodeSignLine(a_NBT.GetString(currentLine)));
+		int messages = a_NBT.FindChildByName(front, "messages");
+		if ((messages < 0) || (a_NBT.GetType(messages) != TAG_List) || (a_NBT.GetChildrenType(messages) != TAG_String))
+		{
+			return Sign;
+		}
+		int count = 0;
+		for (int Child = a_NBT.GetFirstChild(messages); Child >= 0; Child = a_NBT.GetNextSibling(Child))
+		{
+			if (count > 3)
+			{
+				return Sign;
+			}
+			Sign->SetLine(static_cast<size_t>(count), a_NBT.GetString(Child));
+			count++;
+		}
 	}
-
-	currentLine = a_NBT.FindChildByName(a_TagIdx, "Text2");
-	if (currentLine >= 0)
-	{
-		Sign->SetLine(1, DecodeSignLine(a_NBT.GetString(currentLine)));
-	}
-
-	currentLine = a_NBT.FindChildByName(a_TagIdx, "Text3");
-	if (currentLine >= 0)
-	{
-		Sign->SetLine(2, DecodeSignLine(a_NBT.GetString(currentLine)));
-	}
-
-	currentLine = a_NBT.FindChildByName(a_TagIdx, "Text4");
-	if (currentLine >= 0)
-	{
-		Sign->SetLine(3, DecodeSignLine(a_NBT.GetString(currentLine)));
-	}
-
+	// TODO: implement back side and extra data
 	return Sign;
 }
 

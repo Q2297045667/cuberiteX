@@ -53,6 +53,7 @@ protected:
 	virtual void SendDynamicRegistries() override;
 	virtual void SendInventorySlot(char a_WindowID, short a_SlotNum, const cItem & a_Item) override;
 	virtual void SendRespawn(eDimension a_Dimension) override;
+	virtual void SendUpdateBlockEntity(cBlockEntity & a_BlockEntity) override;
 
 	virtual void HandlePacketBlockPlace(cByteBuffer & a_ByteBuffer) override;
 	virtual void HandlePacketClientSettings(cByteBuffer & a_ByteBuffer) override;
@@ -64,6 +65,7 @@ protected:
 	virtual Item GetItemFromProtocolID(UInt32 a_ProtocolID) const override;
 	virtual UInt32 GetProtocolMobType(eMonsterType a_MobType) const override;
 	virtual UInt8  GetProtocolEntityType(const cEntity & a_Entity) const override;
+	virtual UInt32 GetBlockEntityID(const cBlockEntity & a_BlockEntity) const override;
 
 	virtual UInt32 GetPacketID(ePacketType a_PacketType) const override;
 	virtual Version GetProtocolVersion() const override;
